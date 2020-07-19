@@ -1,6 +1,26 @@
+
+#=
+Current design:
+
+The only io context is :depth, with  0 <==> toplevel.
+At depth 0:
+    - The quantity is shown in "long" form, possible multi-line
+    - The type and metadata is explicitly shown at level 1 (if not evident from annotation)
+    - Field names are shown
+    - Constituent values and parameters are shown at level 1
+For 1 <= depth < max_depth:
+    - The quantity is shown in compact form, genrally single-line
+    - No explicit type annotation, unless
+    - Field names are not shown
+    - Contained values are shown at depth+1
+For depth == max_depth:
+    - Primitive quantities are shown
+    - Composite quantities are shown as type{...}(...)
+=#
+
 module ShowNice
 
-export _show, set_depth
+export _show, set_depth, set_tdepth
 
 import Base: show
 using Base: print_without_params, show_datatype, io_has_tvar_name, uniontypes, show_delim_array, show_type_name, has_typevar, unwrap_unionall, print_without_params
@@ -33,54 +53,47 @@ end
 _show(x) = _show(stdout, x)
 _show(io::IO, x) = show(io, x)
 
-
 ## show types
 
 
-# Show a component as nested
-show_nested(io, x) = _show(IOContext(io, :depth => get(io, :depth, 0) + 1), x)
+nested(io::IO) = IOContext(io, :depth => get(io, :depth, 0) + 1)
 
-# Show a component compactly
-show_compact(io, x) = _show(IOContext(io, :compact => true, :depth => get(io, :depth, 0) + 1), x)
 
-# Show a component without explicit type annotation
-show_typeless(io, x) = _show(IOContext(io, :show_typeinfo => false, :depth => get(io, :depth, 0) + 1), x)
-
+depth(io::IO) = get(io, :depth, 0)
 
 function _show(io::IO, ::Type{Base.Bottom})
-    get(io, :show_typeinfo, true) && print(io, "type ")
+    depth(io) == 0 && print(io, "type ")
     print(io, "Union{}")
 end
 
 
 function _show(io::IO, @nospecialize(t::Union))
-    get(io, :show_typeinfo, true) && print(io, "type ")
+    depth(io) == 0 && print(io, "type ")
     print(io, "Union")
 
     utypes = uniontypes(t)
-    if get(io, :depth, 0) == max_tdepth
+    if depth(io) == max_tdepth
         isempty(utypes) || print(io, "{…}")
     else
-        show_delim_array(typecontex(io), utypes, '{', ',', '}', false)
+        show_delim_array(nested(io), utypes, '{', ',', '}', false)
     end
 end
 
 
 
 function _show(io::IO, @nospecialize(t::DataType))
-    get(io, :show_typeinfo, true) && print(io, "type ")
+    depth(io) == 0 && print(io, "type ")
     show_type_name(io, t.name)
 
     n = length(t.parameters)::Int
     n==0 && return
 
-    if  get(io, :depth, 0) == max_tdepth
+    if depth(io) == max_tdepth
         print(io, "{…}")
     else
         print(io, '{')
-        # don't include type annotation in type parameters
         for (i, p) in enumerate(t.parameters)
-            show_typeless(io, p)
+            _show(nested(io), p)
             i < n && print(io, ',')
         end
         print(io, '}')
@@ -90,9 +103,8 @@ end
 
 
 function _show(io::IO, @nospecialize(t::UnionAll))
-    get(io, :show_typeinfo, true) && print(io, "type ")
-
-    if get(io, :depth, 0) == max_tdepth
+    if depth(io) == max_tdepth
+        max_tdepth == 0 && print(io, "type ")
         ut = unwrap_unionall(t)
         show_type_name(io, ut.name)
         print(io, "{⋰}")
@@ -109,10 +121,13 @@ function _show(io::IO, @nospecialize(t::UnionAll))
                 counter += 1
             end
         end
-        # don't increase depth for nested UnionAll's
-        _show(IOContext(io, :unionall_env => t.var, :show_typeinfo => false), t.body)
+
+        # We don't need to worry about printing "type" here.
+        # When the UnionAll is fully unwrapped, we will get a "regular" type that will
+        # print "type" if appropriate.
+        _show(IOContext(io, :unionall_env => t.var), t.body)
         print(io, " where ")
-        show_typeless(io, t.var)
+        _show(nested(io), t.var)
     end
     nothing
 end
@@ -123,7 +138,7 @@ end
 function _show(io::IO, tv::TypeVar)
     in_env = (:unionall_env => tv) in io
     function show_bound(io::IO, @nospecialize(b))
-        parens = isa(b,UnionAll) && !print_without_params(b) && (get(io, :depth, 0) < max_tdepth)
+        parens = isa(b,UnionAll) && !print_without_params(b) && depth(io) < max_tdepth
         parens && print(io, "(")
         _show(io, b)        #  the only difference from Base
         parens && print(io, ")")
@@ -164,7 +179,7 @@ function _show(io::IO, t::NamedTuple)
             # show(IOContext(io, :typeinfo =>
                            # t isa typeinfo <: NamedTuple ? fieldtype(typeinfo, i) : Any),
                  # getfield(t, i))
-            show_compact(io, getfield(t, i))
+            _show(nested(io), getfield(t, i))
             if n == 1
                 print(io, ",")
             elseif i < n

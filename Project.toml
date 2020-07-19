@@ -1,4 +1,4 @@
 name = "ShowNice"
 uuid = "8630ae36-0a97-4d9b-877e-6f3468364956"
 authors = ["Ryan Bennink <benninkrs@ornl.gov>"]
-version = "0.1.0"
+version = "0.1.1"
