@@ -23,7 +23,7 @@ module ShowNice
 export _show, set_depth, set_tdepth
 
 import Base: show
-using Base: print_without_params, show_datatype, io_has_tvar_name, uniontypes, show_delim_array, show_type_name, has_typevar, unwrap_unionall, print_without_params
+using Base: print_without_params, show_datatype, io_has_tvar_name, uniontypes, show_delim_array, show_type_name, has_typevar, unwrap_unionall, print_without_params, show_circular
 
 
 global max_depth = 2
@@ -72,7 +72,7 @@ function _show(io::IO, @nospecialize(t::Union))
     print(io, "Union")
 
     utypes = uniontypes(t)
-    if depth(io) == max_tdepth
+    if depth(io) >= max_tdepth
         isempty(utypes) || print(io, "{…}")
     else
         show_delim_array(nested(io), utypes, '{', ',', '}', false)
@@ -83,12 +83,27 @@ end
 
 function _show(io::IO, @nospecialize(t::DataType))
     depth(io) == 0 && print(io, "type ")
-    show_type_name(io, t.name)
+
+    istuple = t.name === Tuple.name
 
     n = length(t.parameters)::Int
+
+    # Print homogeneous tuples with more than 2 elements compactly as NTuple{N, T}
+    if istuple && n > 2 && all(i -> (t.parameters[1] === i), t.parameters)
+        if depth(io) >= max_tdepth
+            print(io, "NTuple{…}")
+        else
+            print(io, "NTuple{", n, ',', t.parameters[1], "}")
+        end
+        return
+    end
+
+    # Otherwise, display type name and parameters
+    show_type_name(io, t.name)
+
     n==0 && return
 
-    if depth(io) == max_tdepth
+    if depth(io) >= max_tdepth
         print(io, "{…}")
     else
         print(io, '{')
@@ -103,7 +118,7 @@ end
 
 
 function _show(io::IO, @nospecialize(t::UnionAll))
-    if depth(io) == max_tdepth
+    if depth(io) >= max_tdepth
         max_tdepth == 0 && print(io, "type ")
         ut = unwrap_unionall(t)
         show_type_name(io, ut.name)
@@ -165,6 +180,7 @@ function _show(io::IO, tv::TypeVar)
 end
 
 
+## Show values
 
 # Show NamedTuples with less type information
 function _show(io::IO, t::NamedTuple)
@@ -190,32 +206,65 @@ function _show(io::IO, t::NamedTuple)
     end
 end
 
-# function show_datatype(io::IO, x::DataType)
-#     istuple = x.name === Tuple.name
-#     if (!isempty(x.parameters) || istuple) && x !== Tuple
-#         n = length(x.parameters)::Int
-#
-#         # Print homogeneous tuples with more than 3 elements compactly as NTuple{N, T}
-#         if istuple && n > 3 && all(i -> (x.parameters[1] === i), x.parameters)
-#             print(io, "NTuple{", n, ',', x.parameters[1], "}")
-#         else
-#             show_type_name(io, x.name)
-#             # Do not print the type parameters for the primary type if we are
-#             # printing a method signature or type parameter.
-#             # Always print the type parameter if we are printing the type directly
-#             # since this information is still useful.
-#             print(io, '{')
-#             for (i, p) in enumerate(x.parameters)
-#                 show(io, p)
-#                 i < n && print(io, ',')
-#             end
-#             print(io, '}')
-#         end
-#     else
-#         show_type_name(io, x.name)
-#     end
-# end
 
+_show(io::IO, @nospecialize(x)) = _show_struct(io, x)
+
+function _show_struct(io::IO, @nospecialize(x))
+    t = typeof(x)
+    nf = nfields(x)
+    nb = sizeof(x)
+    if nf ==0 && nb > 0
+        error("Have a quantity with 0 fields but nonzero size.  What does that mean?")
+    end
+
+    if depth(io) >= max_depth
+        # show no structure
+        _show(nested(io), t)
+        nf == 0 ? println(io, "()") : println(io, "(…)")
+    elseif depth(io) == 0
+        # Show nested structure
+        _show(nested(io), t)
+        println(io, ":")
+        if nf != 0
+            if !show_circular(io, x)
+                recur_io = IOContext(nested(io), Pair{Symbol,Any}(:SHOWN_SET, x),
+                                     Pair{Symbol,Any}(:typeinfo, Any))
+                for i in 1:nf
+                    fname = fieldname(t, i)
+                    print(io, "   ", fname, " = ")
+                    if !isdefined(x, fname)
+                        print(io, undef_ref_str)
+                    else
+                        _show(recur_io, getfield(x, i))
+                        println(io)
+                    end
+                end
+            end
+        end
+    else
+        # Show in compact form
+        _show(nested(io), t)        # show just t.name?
+        print(io, '(')
+        if nf != 0
+            if !show_circular(io, x)
+                recur_io = IOContext(nested(io), Pair{Symbol,Any}(:SHOWN_SET, x),
+                                     Pair{Symbol,Any}(:typeinfo, Any))
+                for i in 1:nf
+                    f = fieldname(t, i)
+                    if !isdefined(x, f)
+                        print(io, undef_ref_str)
+                    else
+                        show(recur_io, getfield(x, i))
+                    end
+                    if i < nf
+                        print(io, ", ")
+                    end
+                end
+            end
+        end
+        print(io,')')
+    end
+end
 
 # change how structs are shown
 
