@@ -8,7 +8,7 @@ Here's how Base works:
     show(io, MIME"text/plain", x) calls show(io, x)
 
 4. print(x) = print(stdout, x)
-5. print(io, x) falls back to show(io, MIME"text/plain", x)
+5. print(io, x) falls back to show(io, MIME"text/plain", x), hence to show(io, x)
 
 6. string(x) defaults to print(Buffer, x)
 
@@ -50,7 +50,8 @@ module ShowNice
 
 export test_show
 
-import Base: show
+#import Base: show
+export shownice
 using Base: print_without_params, show_datatype, io_has_tvar_name, uniontypes, has_typevar, unwrap_unionall, print_without_params, show_circular
 
 
@@ -58,16 +59,16 @@ function test_show()
 
 t = (2, 'a', 3.1416)
 
-show(t)
+shownice(t)
 println()
-show(typeof(t))
+shownice(typeof(t))
 println()
 
 
 nt = (name = "Mary", age = 20)
-show(nt)
+shownice(nt)
 println()
-show(typeof(nt))
+shownice(typeof(nt))
 println()
 
 end
@@ -114,8 +115,9 @@ end
 #--------------------------------------------------------------
 ## Fallback
 
-# _show(x) = _show(stdout, x)
+shownice(x) = shownice(stdout, x)
 
+# shownice(io, x) = show(io, x)
 
 #-------------------------------------------------------------
 ## show types
@@ -123,8 +125,8 @@ end
 # Somes types (e.g. Union, UnionAll, Tuple) are actually instances of DataType
 
 
-function show(io::IO, @nospecialize t::Type)
-    depth(io) == 0 && print(io, "type ")
+function shownice(io::IO, @nospecialize t::Type)
+    depth(io) == 0 && print(io, "Type ")
     show_type(IOContext(io, :istype => true), t)
 end
 
@@ -132,18 +134,18 @@ end
 function show_protected(io::IO, @nospecialize t)
     if isa(t, UnionAll)
         print(io, '(')
-        show(io, t)
+        shownice(io, t)
         print(io, ')')
     else
-        show(io, t)
+        shownice(io, t)
     end
 end
 
 
-function show_type(io::IO, t)
-    @warn "Unmatched method for type"
-    Base.show_type_name(io, t.name)
-end
+# function show_type(io::IO, t)
+#     @warn "Unmatched method for type"
+#     Base.show_type_name(io, t.name)
+# end
 
 
 # Default display of a type:  type_name{parameters}
@@ -200,16 +202,6 @@ function show_type(io::IO, @nospecialize t::Union)
 end
 
 
-# function show(io::IO, @nospecialize(x))
-#     if isstructtype(typeof(x))
-#         show_struct(io, x)
-#     else
-#         show(io, x)
-#     end
-# end
-
-
-
 
 function show_type(io::IO, @nospecialize t::UnionAll)
     #@info "show(UnionAll) over $(t.var)"
@@ -245,7 +237,10 @@ function show_type(io::IO, @nospecialize t::UnionAll)
 end
 
 
-
+function shownice(io::IO, tv::TypeVar)
+    print(io, "TypeVar ")
+    show(io, tv)
+end
 # # TODO:  When _show is renamed to show, this method can be eliminated
 # function _show(io::IO, tv::TypeVar)
 #     in_env = (:unionall_env => tv) in io
@@ -282,24 +277,34 @@ end
 # Can be eliminated
 # _show(io::IO, @nospecialize(x::String)) = show(io, x)
 
+# function show(io::IO, @nospecialize(x))
+#     if isstructtype(typeof(x))
+#         show_struct(io, x)
+#     else
+#         show(io, x)
+#     end
+# end
+
 
 # Default (e.g. structs)
-function show(io::IO, @nospecialize x)
+function shownice(io::IO, @nospecialize x)
     t = typeof(x)
     nf = nfields(x)
-    nb = sizeof(x)
-    if nf ==0 && nb > 0
-        @info x
-        error("Have a quantity with 0 fields but nonzero size.  What does that mean?")
-    end
 
+    # show primitive types using built-in methods
+    if nf ==0
+        show(io, x)
+        return
+     end
+
+    # show structure types
     if depth(io) >= maxdepth(io)
         # show no structure
-        show(deeper(io), t)
+        shownice(deeper(io), t)
         nf == 0 ? print(io, "()") : print(io, "(…)")
     elseif depth(io) == 0
         # Show nested structure
-        show(deeper(io), t)
+        shownice(deeper(io), t)
         println(io, ":")
         if nf != 0
             if !show_circular(io, x)
@@ -311,15 +316,15 @@ function show(io::IO, @nospecialize x)
                     if !isdefined(x, fname)
                         print(io, undef_ref_str)
                     else
-                        show(recur_io, getfield(x, i))
+                        shownice(recur_io, getfield(x, i))
                         println(io)
                     end
                 end
             end
         end
-    else
+    else  # depth > 0
         # Show in compact form
-        show(deeper(io), t)        # show just t.name?
+        shownice(deeper(io), t)        # show just t.name?
         print(io, '(')
         if nf != 0
             if !show_circular(io, x)
@@ -330,7 +335,7 @@ function show(io::IO, @nospecialize x)
                     if !isdefined(x, f)
                         print(io, undef_ref_str)
                     else
-                        show(recur_io, getfield(x, i))
+                        shownice(recur_io, getfield(x, i))
                     end
                     if i < nf
                         print(io, ", ")
@@ -344,7 +349,7 @@ end
 
 
 
-function show(io::IO, @nospecialize(x::Tuple))
+function shownice(io::IO, @nospecialize(x::Tuple))
     nf = length(x)
     if depth(io) >= maxdepth(io)
         # show no structure
@@ -359,7 +364,7 @@ function show(io::IO, @nospecialize(x::Tuple))
                     if !isdefined(x, i)
                         print(io, undef_ref_str)
                     else
-                        show(recur_io, getfield(x, i))
+                        shownice(recur_io, getfield(x, i))
                     end
                     if i < nf
                         print(io, ", ")
@@ -375,7 +380,7 @@ end
 
 
 # Don't show type of NamedTUples
-function show(io::IO, @nospecialize t::NamedTuple)
+function shownice(io::IO, @nospecialize t::NamedTuple)
     n = nfields(t)
     if depth(io) >= maxdepth(io)
         # show no structure
@@ -391,7 +396,7 @@ function show(io::IO, @nospecialize t::NamedTuple)
                 # show(IOContext(io, :typeinfo =>
                 # t isa typeinfo <: NamedTuple ? fieldtype(typeinfo, i) : Any),
                 # getfield(t, i))
-                show(deeper(io), getfield(t, i))
+                shownice(deeper(io), getfield(t, i))
                 if n == 1
                     print(io, ",")      # add a comma to indicate it's a tuple
                 elseif i < n
@@ -409,11 +414,11 @@ size2string(d) = isempty(d) ? "0-dim" :
                  join(map(string,d), '×')
 
 
-function show(io::IO, A::AbstractArray)
+function shownice(io::IO, A::AbstractArray)
     if depth(io) == 0
         # print as usual
         print(io, size2string(size(A)), " ")
-        show(deeper(io), typeof(A))
+        shownice(deeper(io), typeof(A))
         # show indices?
 
         if !isempty(A)
@@ -447,7 +452,7 @@ function print_array_inline(io::IO, A::AbstractVector, max_show, delim = ',')
     # If we can show all the elements, do so.
     n_show = length(A) <= max_show ? length(A) : max_show-1
     for i = 1:n_show
-        show(deeper(io), A[i])
+        shownice(deeper(io), A[i])
         i < n_show && print(io, delim, " ")
     end
     trunc = false
